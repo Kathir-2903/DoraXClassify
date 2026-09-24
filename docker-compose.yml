@@ -1,0 +1,116 @@
+# Dora X Classify — local development (one command):
+#
+#   docker compose up --build        frontend http://localhost:5173 · API http://localhost:8000/docs
+#
+# Backend (uvicorn --reload) and frontend (Vite HMR) run from your working tree via
+# bind mounts, so code edits apply instantly. MongoDB is seeded with demo data and
+# every integration runs in mock mode unless you configure .env.
+#
+#   docker compose --profile test run --rm backend-tests    # pytest
+#   docker compose --profile test run --rm frontend-tests   # vitest
+#   docker compose --profile tools up                        # + mongo-express :8081
+#
+# Production-like images: docker compose -f docker-compose.prod.yml up --build
+name: dora-x-classify
+
+x-backend-env: &backend-env
+  # Inside compose MongoDB is the `mongodb` service, regardless of MONGO_URI in .env.
+  MONGO_URI: ${DOCKER_MONGO_URI:-mongodb://mongodb:27017}
+  MONGO_DATABASE: ${MONGO_DATABASE:-dora_x_classify}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+  BACKEND_URL: ${BACKEND_URL:-http://localhost:8000}
+  SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+  CLASSIFY_MOCK_MODE: ${CLASSIFY_MOCK_MODE:-true}
+  GEMINI_MOCK_MODE: ${GEMINI_MOCK_MODE:-true}
+  EMAIL_MOCK_MODE: ${EMAIL_MOCK_MODE:-true}
+  WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-false}
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-env
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+      - whisper-cache:/root/.cache/huggingface
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    restart: unless-stopped
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+      VITE_SHOW_DEMO_LOGINS: ${VITE_SHOW_DEMO_LOGINS:-true}
+      VITE_USE_POLLING: ${VITE_USE_POLLING:-false}
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # keep the container's Linux node_modules
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend-tests:
+    profiles: ["test"]
+    build:
+      context: ./backend
+      target: dev
+    volumes:
+      - ./backend:/app
+    command: ["python", "-m", "pytest", "-q"]
+
+  frontend-tests:
+    profiles: ["test"]
+    build:
+      context: ./frontend
+      target: dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: ["npx", "vitest", "run"]
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    profiles: ["tools"]
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://mongodb:27017
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      - mongodb
+
+volumes:
+  mongo-data:
+  whisper-cache:

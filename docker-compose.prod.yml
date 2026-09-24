@@ -1,0 +1,57 @@
+# Production-like stack: baked images, non-root backend, nginx-served frontend.
+#   docker compose -f docker-compose.prod.yml up --build   → http://localhost:8080
+name: dora-x-classify-prod
+
+services:
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MONGO_URI: ${DOCKER_MONGO_URI:-mongodb://mongodb:27017}
+      MONGO_DATABASE: ${MONGO_DATABASE:-dora_x_classify}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:8080}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      CLASSIFY_MOCK_MODE: ${CLASSIFY_MOCK_MODE:-true}
+      GEMINI_MOCK_MODE: ${GEMINI_MOCK_MODE:-true}
+      EMAIL_MOCK_MODE: ${EMAIL_MOCK_MODE:-true}
+      RECORDING_STORAGE_DIR: /app/storage/recordings
+    volumes:
+      - recordings:/app/storage/recordings
+      - whisper-cache:/home/dxc/.cache/huggingface
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+      args:
+        VITE_SHOW_DEMO_LOGINS: ${VITE_SHOW_DEMO_LOGINS:-true}
+    restart: unless-stopped
+    ports:
+      - "${PROD_PORT:-8080}:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo-data:
+  recordings:
+  whisper-cache:

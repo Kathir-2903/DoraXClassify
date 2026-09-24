@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dora-x-classify",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "--build", "--renew-anon-volumes"],
+      "port": 5173
+    }
+  ]
+}
